@@ -19,7 +19,7 @@ type APIServer struct {
 
 func (s *APIServer) Run() {
 	router := mux.NewRouter()
-
+	router.HandleFunc("/login", makeHTTPHandleFunc(s.handleLogin))
 	router.HandleFunc("/account", makeHTTPHandleFunc(s.handleAccount))
 	router.HandleFunc("/account/{id}", withJTWAuth(makeHTTPHandleFunc(s.handleGetAccountByID), s.store))
 	router.HandleFunc("/transfer", makeHTTPHandleFunc(s.handleTransfer))
@@ -73,20 +73,18 @@ func (s *APIServer) handleGetAccountByID(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *APIServer) handleCreateAccount(w http.ResponseWriter, r *http.Request) error {
-	createAccountRequest := new(CreateAccountRequest)
+	req := new(CreateAccountRequest)
 
-	if err := json.NewDecoder(r.Body).Decode(&createAccountRequest); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		return err
 	}
 
-	account := NewAccount(createAccountRequest.FirstName, createAccountRequest.LastName)
-	if err := s.store.CreateAccount(account); err != nil {
-		return err
-	}
-
-	tokenString, err := createJWT(account)
-	fmt.Println("JWT token: " + tokenString)
+	account, err := NewAccount(req.FirstName, req.LastName, req.Password)
 	if err != nil {
+		return err
+	}
+
+	if err := s.store.CreateAccount(account); err != nil {
 		return err
 	}
 
@@ -111,6 +109,42 @@ func (s *APIServer) handleTransfer(w http.ResponseWriter, r *http.Request) error
 	}
 	defer r.Body.Close()
 	return WriteJSON(w, http.StatusOK, transferReq)
+}
+
+// 4999671
+func (s *APIServer) handleLogin(w http.ResponseWriter, r *http.Request) error {
+	if r.Method != "POST" {
+		return fmt.Errorf("method now allowed %s", r.Method)
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return err
+	}
+
+	//search for user
+	acc, err := s.store.GetAccountByNumber(int(req.Number))
+	if err != nil {
+		return err
+	}
+
+	if !acc.ValidPassword(req.Password) {
+		return fmt.Errorf("not authenticated")
+	}
+
+	fmt.Printf("%+v\n", acc)
+
+	token, err := createJWT(acc)
+	if err != nil {
+		return err
+	}
+
+	resp := LoginResponse{
+		Token:  token,
+		Number: acc.Number,
+	}
+
+	return WriteJSON(w, http.StatusOK, resp)
 }
 
 func WriteJSON(w http.ResponseWriter, status int, v any) error {
